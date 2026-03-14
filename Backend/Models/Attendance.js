@@ -4,7 +4,7 @@ const attendanceSchema = new mongoose.Schema({
   student: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   batch: { type: mongoose.Schema.Types.ObjectId, ref: 'Batch', required: true },
   date: { type: Date, required: true },
-  status: { type: String, enum: ['present', 'absent'], default: 'present' },
+  status: { type: String, enum: ['present', 'absent', 'holiday'], default: 'present' },
   markedAt: { type: Date, default: Date.now },
   ipAddress: { type: String }
 }, { timestamps: true });

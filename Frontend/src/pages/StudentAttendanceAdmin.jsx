@@ -11,17 +11,33 @@ const StudentAttendanceAdmin = () => {
   const { studentId } = useParams();
   const [student, setStudent] = useState(null);
   const [records, setRecords] = useState([]);
-  const [stats, setStats] = useState([]);
+  const [stats, setStats] = useState({
+    overall: { totalDays: 0, present: 0, absent: 0, holiday: 0, presentPercentage: 0, absentPercentage: 0, holidayPercentage: 0 },
+    weekly: { totalDays: 0, present: 0, absent: 0, holiday: 0, presentPercentage: 0, absentPercentage: 0, holidayPercentage: 0 },
+    monthly: { totalDays: 0, present: 0, absent: 0, holiday: 0, presentPercentage: 0, absentPercentage: 0, holidayPercentage: 0 },
+    yearly: { totalDays: 0, present: 0, absent: 0, holiday: 0, presentPercentage: 0, absentPercentage: 0, holidayPercentage: 0 }
+  });
   const [loading, setLoading] = useState(true);
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
+  const [updating, setUpdating] = useState(null);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
+      // First get student to get batchId
+      let currentStudent = student;
+      if (!currentStudent) {
+        const studentsRes = await api.get('/admin/students');
+        const students = studentsRes.data.data || [];
+        currentStudent = students.find((s) => s._id === studentId);
+        if (currentStudent) setStudent(currentStudent);
+      }
+
       const params = new URLSearchParams();
       if (startDate) params.append('startDate', startDate);
       if (endDate) params.append('endDate', endDate);
+      if (currentStudent?.batch?._id) params.append('batchId', currentStudent.batch._id);
       const qs = params.toString() ? `?${params}` : '';
 
       const [attRes, statsRes] = await Promise.all([
@@ -29,45 +45,36 @@ const StudentAttendanceAdmin = () => {
         api.get(`/admin/stats/student/${studentId}${qs}`),
       ]);
 
-      const attData = attRes.data.data || [];
-      setRecords(attData);
-      setStats(statsRes.data.data || []);
-
-      // Get student info from first record or fetch students list
-      if (attData.length > 0 && attData[0].student) {
-        setStudent(attData[0].student);
-      } else if (!student) {
-        try {
-          const studentsRes = await api.get('/admin/students');
-          const students = studentsRes.data.data || [];
-          const found = students.find((s) => s._id === studentId);
-          if (found) setStudent(found);
-        } catch {
-          // silent
-        }
-      }
-    } catch {
-      // silent
+      setRecords(attRes.data.data || []);
+      setStats(statsRes.data.data || stats);
+    } catch (err) {
+      console.error(err);
     } finally {
       setLoading(false);
     }
-  }, [studentId, startDate, endDate]);
+  }, [studentId, startDate, endDate, student]);
 
   useEffect(() => {
     fetchData();
   }, [fetchData]);
 
-  // Line chart data
-  const chartData = stats.map((s) => ({
-    date: new Date(s.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-    status: s.status === 'present' ? 1 : 0,
-  }));
-
-  // Summary stats
-  const totalDays = records.length;
-  const presentDays = records.filter((r) => r.status === 'present').length;
-  const absentDays = totalDays - presentDays;
-  const percentage = totalDays > 0 ? ((presentDays / totalDays) * 100).toFixed(1) : 0;
+  const handleStatusChange = async (recordId, date, newStatus) => {
+    if (!student?.batch?._id) return;
+    setUpdating(recordId || date);
+    try {
+      await api.post('/admin/attendance/student', {
+        studentId,
+        batchId: student.batch._id,
+        date,
+        status: newStatus
+      });
+      fetchData();
+    } catch (err) {
+      alert('Failed to update attendance');
+    } finally {
+      setUpdating(null);
+    }
+  };
 
   const initials = student?.name
     ? student.name.split(' ').map((n) => n[0]).join('').toUpperCase().slice(0, 2)
@@ -78,6 +85,26 @@ const StudentAttendanceAdmin = () => {
     setEndDate('');
   };
 
+  const StatBox = ({ title, data }) => (
+    <div className="stat-card" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '8px' }}>
+      <h4 style={{ margin: 0, fontSize: '0.85rem', color: '#6b7280' }}>{title}</h4>
+      <div style={{ display: 'flex', gap: '16px', width: '100%' }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: '1.25rem', fontWeight: 700, color: '#111827' }}>{data.presentPercentage.toFixed(1)}%</div>
+          <div style={{ fontSize: '0.75rem', color: '#10b981' }}>{data.present} Present</div>
+        </div>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: '1.25rem', fontWeight: 700, color: '#111827' }}>{data.absentPercentage.toFixed(1)}%</div>
+          <div style={{ fontSize: '0.75rem', color: '#ef4444' }}>{data.absent} Absent</div>
+        </div>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: '1.25rem', fontWeight: 700, color: '#111827' }}>{data.holidayPercentage.toFixed(1)}%</div>
+          <div style={{ fontSize: '0.75rem', color: '#6366f1' }}>{data.holiday} Holiday</div>
+        </div>
+      </div>
+    </div>
+  );
+
   return (
     <Layout>
       <Link to="/admin/students" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '0.88rem', marginBottom: '12px', color: '#6b7280' }}>
@@ -85,11 +112,10 @@ const StudentAttendanceAdmin = () => {
       </Link>
 
       <div className="page-header">
-        <h1>Student Attendance</h1>
-        <p>Detailed attendance view for this student</p>
+        <h1>Student Attendance & Analytics</h1>
+        <p>Comprehensive attendance tracking and reporting</p>
       </div>
 
-      {/* Student Info */}
       {student && (
         <div className="student-info-header">
           <div className="student-avatar">{initials}</div>
@@ -105,47 +131,13 @@ const StudentAttendanceAdmin = () => {
         </div>
       )}
 
-      {/* Stats */}
-      <div className="stats-grid">
-        <div className="stat-card">
-          <div className="stat-icon info">
-            <FiCalendar />
-          </div>
-          <div className="stat-info">
-            <h4>Total Days</h4>
-            <div className="stat-value">{totalDays}</div>
-          </div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-icon success">
-            <FiCheckCircle />
-          </div>
-          <div className="stat-info">
-            <h4>Present</h4>
-            <div className="stat-value">{presentDays}</div>
-          </div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-icon danger">
-            <FiXCircle />
-          </div>
-          <div className="stat-info">
-            <h4>Absent</h4>
-            <div className="stat-value">{absentDays}</div>
-          </div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-icon warning">
-            <FiCheckCircle />
-          </div>
-          <div className="stat-info">
-            <h4>Percentage</h4>
-            <div className="stat-value">{percentage}%</div>
-          </div>
-        </div>
+      <div className="stats-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))' }}>
+        <StatBox title="Weekly Stats" data={stats.weekly} />
+        <StatBox title="Monthly Stats" data={stats.monthly} />
+        <StatBox title="Yearly Stats" data={stats.yearly} />
+        <StatBox title="Overall Stats" data={stats.overall} />
       </div>
 
-      {/* Filters */}
       <div className="filters-bar">
         <div className="filter-group">
           <label>Start Date</label>
@@ -169,81 +161,51 @@ const StudentAttendanceAdmin = () => {
           <p>Loading attendance data...</p>
         </div>
       ) : (
-        <>
-          {/* Line Chart */}
-          {chartData.length > 0 && (
-            <div className="chart-container">
-              <h3>Attendance Pattern</h3>
-              <ResponsiveContainer width="100%" height={300}>
-                <LineChart data={chartData}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="date" tick={{ fontSize: 12 }} />
-                  <YAxis
-                    domain={[0, 1]}
-                    ticks={[0, 1]}
-                    tickFormatter={(v) => (v === 1 ? 'Present' : 'Absent')}
-                  />
-                  <Tooltip
-                    formatter={(value) => [value === 1 ? 'Present' : 'Absent', 'Status']}
-                  />
-                  <Legend />
-                  <Line
-                    type="stepAfter"
-                    dataKey="status"
-                    stroke="#4f46e5"
-                    strokeWidth={2}
-                    dot={{ fill: '#4f46e5', r: 4 }}
-                    name="Attendance"
-                  />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-          )}
-
-          {/* Table */}
-          {records.length === 0 ? (
-            <div className="card">
-              <div className="empty-state">
-                <FiCalendar />
-                <h3>No Attendance Records</h3>
-                <p>No records found for the selected period</p>
-              </div>
-            </div>
-          ) : (
-            <div className="table-container">
-              <table>
-                <thead>
-                  <tr>
-                    <th>#</th>
-                    <th>Date</th>
-                    <th>Day</th>
-                    <th>Status</th>
-                    <th>Time</th>
+        <div className="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Day</th>
+                <th>Status</th>
+                <th>Time</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {records.map((record, i) => {
+                const date = new Date(record.date);
+                const isUpdating = updating === (record._id || record.date);
+                return (
+                  <tr key={record._id || i} style={{ opacity: isUpdating ? 0.5 : 1 }}>
+                    <td>{date.toLocaleDateString()}</td>
+                    <td>{date.toLocaleDateString('en-US', { weekday: 'long' })}</td>
+                    <td>
+                      <span className={`badge badge-${record.status}`}>
+                        {record.status === 'present' ? <FiCheck /> : (record.status === 'absent' ? <FiX /> : <FiCalendar />)}
+                        {record.status}
+                      </span>
+                    </td>
+                    <td>{record.markedAt ? new Date(record.markedAt).toLocaleTimeString() : '—'}</td>
+                    <td>
+                      <select 
+                        className="btn-sm" 
+                        value={record.status} 
+                        onChange={(e) => handleStatusChange(record._id, record.date, e.target.value)}
+                        disabled={isUpdating}
+                        style={{ padding: '4px 8px', borderRadius: '4px', border: '1px solid #d1d5db' }}
+                      >
+                        <option value="present">Present</option>
+                        <option value="absent">Absent</option>
+                        <option value="holiday">Holiday</option>
+                      </select>
+                    </td>
                   </tr>
-                </thead>
-                <tbody>
-                  {records.map((record, i) => {
-                    const date = new Date(record.date);
-                    return (
-                      <tr key={record._id || i}>
-                        <td>{i + 1}</td>
-                        <td>{date.toLocaleDateString()}</td>
-                        <td>{date.toLocaleDateString('en-US', { weekday: 'long' })}</td>
-                        <td>
-                          <span className={`badge badge-${record.status}`}>
-                            {record.status === 'present' ? <FiCheck /> : <FiX />}
-                            {record.status}
-                          </span>
-                        </td>
-                        <td>{record.markedAt ? new Date(record.markedAt).toLocaleTimeString() : '—'}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       )}
     </Layout>
   );

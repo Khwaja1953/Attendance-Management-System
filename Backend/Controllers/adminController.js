@@ -60,74 +60,163 @@ const getStudentAttendance = async (req, res) => {
 const getBatchStats = async (req, res) => {
   try {
     const { batchId } = req.params;
-    const { startDate, endDate } = req.query;
-
     const match = { batch: require('mongoose').Types.ObjectId.createFromHexString(batchId) };
-    if (startDate || endDate) {
-      match.date = {};
-      if (startDate) match.date.$gte = new Date(startDate);
-      if (endDate) match.date.$lte = new Date(endDate);
-    }
 
-    const stats = await Attendance.aggregate([
-      { $match: match },
-      {
-        $group: {
-          _id: '$date',
-          presentCount: { $sum: { $cond: [{ $eq: ['$status', 'present'] }, 1, 0] } },
-          absentCount: { $sum: { $cond: [{ $eq: ['$status', 'absent'] }, 1, 0] } },
-          total: { $sum: 1 }
+    const getStatsData = async (filterMatch) => {
+      const result = await Attendance.aggregate([
+        { $match: filterMatch },
+        {
+          $group: {
+            _id: null,
+            totalRecords: { $sum: 1 },
+            present: { $sum: { $cond: [{ $eq: ['$status', 'present'] }, 1, 0] } },
+            absent: { $sum: { $cond: [{ $eq: ['$status', 'absent'] }, 1, 0] } },
+            holiday: { $sum: { $cond: [{ $eq: ['$status', 'holiday'] }, 1, 0] } }
+          }
+        },
+        {
+          $project: {
+            _id: 0,
+            totalRecords: 1,
+            present: 1,
+            absent: 1,
+            holiday: 1,
+            presentPercentage: { $cond: [{ $gt: ['$totalRecords', 0] }, { $multiply: [{ $divide: ['$present', '$totalRecords'] }, 100] }, 0] },
+            absentPercentage: { $cond: [{ $gt: ['$totalRecords', 0] }, { $multiply: [{ $divide: ['$absent', '$totalRecords'] }, 100] }, 0] },
+            holidayPercentage: { $cond: [{ $gt: ['$totalRecords', 0] }, { $multiply: [{ $divide: ['$holiday', '$totalRecords'] }, 100] }, 0] }
+          }
         }
-      },
-      { $sort: { _id: 1 } },
-      {
-        $project: {
-          date: '$_id',
-          presentCount: 1,
-          absentCount: 1,
-          total: 1,
-          _id: 0
-        }
-      }
-    ]);
+      ]);
+      return result[0] || { totalRecords: 0, present: 0, absent: 0, holiday: 0, presentPercentage: 0, absentPercentage: 0, holidayPercentage: 0 };
+    };
 
-    return res.status(200).json({ success: true, data: stats });
+    const now = new Date();
+    const oneWeekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const oneMonthAgo = new Date(now.getFullYear(), now.getMonth() - 1, now.getDate());
+    const oneYearAgo = new Date(now.getFullYear() - 1, now.getMonth(), now.getDate());
+
+    const overall = await getStatsData(match);
+    const weekly = await getStatsData({ ...match, date: { $gte: oneWeekAgo } });
+    const monthly = await getStatsData({ ...match, date: { $gte: oneMonthAgo } });
+    const yearly = await getStatsData({ ...match, date: { $gte: oneYearAgo } });
+
+    return res.status(200).json({
+      success: true,
+      data: { overall, weekly, monthly, yearly }
+    });
   } catch (error) {
     return res.status(500).json({ success: false, message: 'Failed to fetch batch stats.', error: error.message });
+  }
+};
+
+const syncAttendance = async (studentId, batchId) => {
+  const student = await User.findById(studentId);
+  const batch = await Batch.findById(batchId);
+  if (!student || !batch) return;
+
+  const startDate = new Date(student.createdAt);
+  startDate.setHours(0, 0, 0, 0);
+  const endDate = new Date();
+  endDate.setHours(0, 0, 0, 0);
+
+  const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const batchDays = batch.days || [];
+
+  for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
+    const currentDay = dayNames[d.getDay()];
+    const dateCopy = new Date(d);
+    
+    let status = 'absent';
+    if (currentDay === 'Sunday' || !batchDays.includes(currentDay)) {
+      status = 'holiday';
+    }
+
+    const existing = await Attendance.findOne({
+      student: studentId,
+      batch: batchId,
+      date: dateCopy
+    });
+
+    if (!existing) {
+      if (dateCopy.getTime() === endDate.getTime()) {
+        const now = new Date();
+        const [endH, endM] = batch.endTime.split(':').map(Number);
+        const currentMinutes = now.getHours() * 60 + now.getMinutes();
+        const endMinutes = endH * 60 + endM;
+
+        if (currentMinutes > endMinutes || status === 'holiday') {
+           await Attendance.create({
+            student: studentId,
+            batch: batchId,
+            date: dateCopy,
+            status: status
+          });
+        }
+      } else {
+        await Attendance.create({
+          student: studentId,
+          batch: batchId,
+          date: dateCopy,
+          status: status
+        });
+      }
+    }
   }
 };
 
 const getStudentStats = async (req, res) => {
   try {
     const { studentId } = req.params;
-    const { startDate, endDate } = req.query;
+    const { batchId } = req.query;
 
-    const match = { student: require('mongoose').Types.ObjectId.createFromHexString(studentId) };
-    if (startDate || endDate) {
-      match.date = {};
-      if (startDate) match.date.$gte = new Date(startDate);
-      if (endDate) match.date.$lte = new Date(endDate);
+    if (batchId) {
+      await syncAttendance(studentId, batchId);
     }
 
-    const stats = await Attendance.aggregate([
-      { $match: match },
-      {
-        $group: {
-          _id: '$date',
-          status: { $first: '$status' }
+    const match = { student: require('mongoose').Types.ObjectId.createFromHexString(studentId) };
+    
+    const getStatsData = async (filterMatch) => {
+      const result = await Attendance.aggregate([
+        { $match: filterMatch },
+        {
+          $group: {
+            _id: null,
+            totalDays: { $sum: 1 },
+            present: { $sum: { $cond: [{ $eq: ['$status', 'present'] }, 1, 0] } },
+            absent: { $sum: { $cond: [{ $eq: ['$status', 'absent'] }, 1, 0] } },
+            holiday: { $sum: { $cond: [{ $eq: ['$status', 'holiday'] }, 1, 0] } }
+          }
+        },
+        {
+          $project: {
+            _id: 0,
+            totalDays: 1,
+            present: 1,
+            absent: 1,
+            holiday: 1,
+            presentPercentage: { $cond: [{ $gt: ['$totalDays', 0] }, { $multiply: [{ $divide: ['$present', '$totalDays'] }, 100] }, 0] },
+            absentPercentage: { $cond: [{ $gt: ['$totalDays', 0] }, { $multiply: [{ $divide: ['$absent', '$totalDays'] }, 100] }, 0] },
+            holidayPercentage: { $cond: [{ $gt: ['$totalDays', 0] }, { $multiply: [{ $divide: ['$holiday', '$totalDays'] }, 100] }, 0] }
+          }
         }
-      },
-      { $sort: { _id: 1 } },
-      {
-        $project: {
-          date: '$_id',
-          status: 1,
-          _id: 0
-        }
-      }
-    ]);
+      ]);
+      return result[0] || { totalDays: 0, present: 0, absent: 0, holiday: 0, presentPercentage: 0, absentPercentage: 0, holidayPercentage: 0 };
+    };
 
-    return res.status(200).json({ success: true, data: stats });
+    const now = new Date();
+    const oneWeekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const oneMonthAgo = new Date(now.getFullYear(), now.getMonth() - 1, now.getDate());
+    const oneYearAgo = new Date(now.getFullYear() - 1, now.getMonth(), now.getDate());
+
+    const overall = await getStatsData(match);
+    const weekly = await getStatsData({ ...match, date: { $gte: oneWeekAgo } });
+    const monthly = await getStatsData({ ...match, date: { $gte: oneMonthAgo } });
+    const yearly = await getStatsData({ ...match, date: { $gte: oneYearAgo } });
+
+    return res.status(200).json({
+      success: true,
+      data: { overall, weekly, monthly, yearly }
+    });
   } catch (error) {
     return res.status(500).json({ success: false, message: 'Failed to fetch student stats.', error: error.message });
   }
@@ -162,6 +251,48 @@ const updateSettings = async (req, res) => {
   }
 };
 
+const updateStudentAttendance = async (req, res) => {
+  try {
+    const { studentId, date, status, batchId } = req.body;
+    const attendanceDate = new Date(date);
+    attendanceDate.setHours(0, 0, 0, 0);
+
+    const attendance = await Attendance.findOneAndUpdate(
+      { student: studentId, batch: batchId, date: attendanceDate },
+      { status, markedAt: new Date() },
+      { upsert: true, new: true }
+    );
+
+    return res.status(200).json({ success: true, message: 'Attendance updated successfully.', data: attendance });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: 'Failed to update student attendance.', error: error.message });
+  }
+};
+
+const updateBatchAttendance = async (req, res) => {
+  try {
+    const { batchId, date, status } = req.body;
+    const attendanceDate = new Date(date);
+    attendanceDate.setHours(0, 0, 0, 0);
+
+    const students = await User.find({ batch: batchId, role: 'student' });
+    
+    const operations = students.map(student => ({
+      updateOne: {
+        filter: { student: student._id, batch: batchId, date: attendanceDate },
+        update: { status, markedAt: new Date() },
+        upsert: true
+      }
+    }));
+
+    await Attendance.bulkWrite(operations);
+
+    return res.status(200).json({ success: true, message: 'Batch attendance updated successfully.' });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: 'Failed to update batch attendance.', error: error.message });
+  }
+};
+
 module.exports = {
   getAllStudents,
   getBatchAttendance,
@@ -169,5 +300,7 @@ module.exports = {
   getBatchStats,
   getStudentStats,
   getSettings,
-  updateSettings
+  updateSettings,
+  updateStudentAttendance,
+  updateBatchAttendance
 };

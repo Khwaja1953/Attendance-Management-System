@@ -2,28 +2,37 @@ import { useState, useEffect, useCallback } from 'react';
 import api from '../services/api';
 import Layout from '../components/Layout';
 import { FiCalendar, FiCheck, FiX, FiFilter } from 'react-icons/fi';
-import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
-} from 'recharts';
 
 const StudentAttendance = () => {
   const [records, setRecords] = useState([]);
+  const [stats, setStats] = useState({
+    overall: { totalDays: 0, present: 0, absent: 0, holiday: 0, presentPercentage: 0, absentPercentage: 0, holidayPercentage: 0 },
+    weekly: { totalDays: 0, present: 0, absent: 0, holiday: 0, presentPercentage: 0, absentPercentage: 0, holidayPercentage: 0 },
+    monthly: { totalDays: 0, present: 0, absent: 0, holiday: 0, presentPercentage: 0, absentPercentage: 0, holidayPercentage: 0 },
+    yearly: { totalDays: 0, present: 0, absent: 0, holiday: 0, presentPercentage: 0, absentPercentage: 0, holidayPercentage: 0 }
+  });
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
 
-  const fetchAttendance = useCallback(async () => {
+  const fetchData = useCallback(async () => {
     setLoading(true);
     try {
       const params = new URLSearchParams({ page, limit: 30 });
       if (startDate) params.append('startDate', startDate);
       if (endDate) params.append('endDate', endDate);
-      const res = await api.get(`/attendance/my?${params}`);
-      const data = res.data.data;
+      
+      const [attRes, statsRes] = await Promise.all([
+        api.get(`/attendance/my?${params}`),
+        api.get('/attendance/stats'),
+      ]);
+      
+      const data = attRes.data.data;
       setRecords(data?.attendance || []);
       setTotalPages(data?.pagination?.pages || 1);
+      if (statsRes.data.data) setStats(statsRes.data.data);
     } catch {
       // silent
     } finally {
@@ -32,23 +41,32 @@ const StudentAttendance = () => {
   }, [page, startDate, endDate]);
 
   useEffect(() => {
-    fetchAttendance();
-  }, [fetchAttendance]);
+    fetchData();
+  }, [fetchData]);
 
-  // Build monthly chart data
-  const monthlyData = {};
-  records.forEach((r) => {
-    const d = new Date(r.date);
-    const key = d.toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
-    if (!monthlyData[key]) monthlyData[key] = { month: key, present: 0, absent: 0 };
-    if (r.status === 'present') monthlyData[key].present++;
-    else monthlyData[key].absent++;
-  });
-  const chartData = Object.values(monthlyData);
+  const StatBox = ({ title, data }) => (
+    <div className="stat-card" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '8px' }}>
+      <h4 style={{ margin: 0, fontSize: '0.85rem', color: '#6b7280' }}>{title}</h4>
+      <div style={{ display: 'flex', gap: '16px', width: '100%' }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: '1.25rem', fontWeight: 700 }}>{data.presentPercentage.toFixed(1)}%</div>
+          <div style={{ fontSize: '0.75rem', color: '#10b981' }}>{data.present} P</div>
+        </div>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: '1.25rem', fontWeight: 700 }}>{data.absentPercentage.toFixed(1)}%</div>
+          <div style={{ fontSize: '0.75rem', color: '#ef4444' }}>{data.absent} A</div>
+        </div>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: '1.25rem', fontWeight: 700 }}>{data.holidayPercentage.toFixed(1)}%</div>
+          <div style={{ fontSize: '0.75rem', color: '#6366f1' }}>{data.holiday} H</div>
+        </div>
+      </div>
+    </div>
+  );
 
   const handleFilter = () => {
     setPage(1);
-    fetchAttendance();
+    fetchData();
   };
 
   const handleClear = () => {
@@ -60,8 +78,15 @@ const StudentAttendance = () => {
   return (
     <Layout>
       <div className="page-header">
-        <h1>My Attendance</h1>
-        <p>View your complete attendance history</p>
+        <h1>My Attendance & Analytics</h1>
+        <p>Complete record of your presence and performance</p>
+      </div>
+
+      <div className="stats-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', marginBottom: '32px' }}>
+        <StatBox title="Weekly" data={stats.weekly} />
+        <StatBox title="Monthly" data={stats.monthly} />
+        <StatBox title="Yearly" data={stats.yearly} />
+        <StatBox title="Overall" data={stats.overall} />
       </div>
 
       {/* Filters */}
@@ -81,24 +106,6 @@ const StudentAttendance = () => {
           Clear
         </button>
       </div>
-
-      {/* Chart */}
-      {chartData.length > 0 && (
-        <div className="chart-container">
-          <h3>Monthly Attendance</h3>
-          <ResponsiveContainer width="100%" height={300}>
-            <BarChart data={chartData}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="month" />
-              <YAxis allowDecimals={false} />
-              <Tooltip />
-              <Legend />
-              <Bar dataKey="present" fill="#22c55e" name="Present" radius={[4, 4, 0, 0]} />
-              <Bar dataKey="absent" fill="#ef4444" name="Absent" radius={[4, 4, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      )}
 
       {/* Table */}
       {loading ? (
@@ -137,7 +144,7 @@ const StudentAttendance = () => {
                       <td>{date.toLocaleDateString('en-US', { weekday: 'long' })}</td>
                       <td>
                         <span className={`badge badge-${record.status}`}>
-                          {record.status === 'present' ? <FiCheck /> : <FiX />}
+                          {record.status === 'present' ? <FiCheck /> : (record.status === 'absent' ? <FiX /> : <FiCalendar />)}
                           {record.status}
                         </span>
                       </td>
@@ -149,7 +156,6 @@ const StudentAttendance = () => {
             </table>
           </div>
 
-          {/* Pagination */}
           <div className="pagination">
             <button disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
               Previous

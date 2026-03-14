@@ -8,17 +8,27 @@ import { FiCheckCircle, FiClock, FiCalendar, FiMapPin, FiCheck, FiX } from 'reac
 const StudentDashboard = () => {
   const { user } = useAuth();
   const [attendance, setAttendance] = useState([]);
+  const [stats, setStats] = useState({
+    overall: { totalDays: 0, present: 0, absent: 0, holiday: 0, presentPercentage: 0, absentPercentage: 0, holidayPercentage: 0 },
+    weekly: { totalDays: 0, present: 0, absent: 0, holiday: 0, presentPercentage: 0, absentPercentage: 0, holidayPercentage: 0 },
+    monthly: { totalDays: 0, present: 0, absent: 0, holiday: 0, presentPercentage: 0, absentPercentage: 0, holidayPercentage: 0 },
+    yearly: { totalDays: 0, present: 0, absent: 0, holiday: 0, presentPercentage: 0, absentPercentage: 0, holidayPercentage: 0 }
+  });
   const [marking, setMarking] = useState(false);
   const [loading, setLoading] = useState(true);
   const [todayStatus, setTodayStatus] = useState(null);
 
-  const fetchAttendance = async () => {
+  const fetchData = async () => {
     try {
-      const res = await api.get('/attendance/my?page=1&limit=10');
-      const records = res.data.data?.attendance || [];
+      const [attRes, statsRes] = await Promise.all([
+        api.get('/attendance/my?page=1&limit=30'),
+        api.get('/attendance/stats'),
+      ]);
+      
+      const records = attRes.data.data?.attendance || [];
       setAttendance(records);
+      if (statsRes.data.data) setStats(statsRes.data.data);
 
-      // Check today's status
       const today = new Date().toDateString();
       const todayRecord = records.find(
         (r) => new Date(r.date).toDateString() === today
@@ -32,7 +42,7 @@ const StudentDashboard = () => {
   };
 
   useEffect(() => {
-    fetchAttendance();
+    fetchData();
   }, []);
 
   const handleMarkAttendance = async () => {
@@ -40,8 +50,7 @@ const StudentDashboard = () => {
     try {
       const res = await api.post('/attendance/mark');
       toast.success(res.data.message || 'Attendance marked successfully!');
-      setTodayStatus('present');
-      fetchAttendance();
+      fetchData();
     } catch (err) {
       toast.error(err.response?.data?.message || 'Failed to mark attendance');
     } finally {
@@ -49,17 +58,35 @@ const StudentDashboard = () => {
     }
   };
 
-  const batch = user?.batch;
-  const totalPresent = attendance.filter((a) => a.status === 'present').length;
+  const StatBox = ({ title, data }) => (
+    <div className="stat-card" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '8px' }}>
+      <h4 style={{ margin: 0, fontSize: '0.85rem', color: '#6b7280' }}>{title}</h4>
+      <div style={{ display: 'flex', gap: '16px', width: '100%' }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: '1.25rem', fontWeight: 700 }}>{data.presentPercentage.toFixed(1)}%</div>
+          <div style={{ fontSize: '0.75rem', color: '#10b981' }}>{data.present} Present</div>
+        </div>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: '1.25rem', fontWeight: 700 }}>{data.absentPercentage.toFixed(1)}%</div>
+          <div style={{ fontSize: '0.75rem', color: '#ef4444' }}>{data.absent} Absent</div>
+        </div>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: '1.25rem', fontWeight: 700 }}>{data.holidayPercentage.toFixed(1)}%</div>
+          <div style={{ fontSize: '0.75rem', color: '#6366f1' }}>{data.holiday} Holiday</div>
+        </div>
+      </div>
+    </div>
+  );
 
+  const batch = user?.batch;
+  
   return (
     <Layout>
       <div className="page-header">
         <h1>Welcome, {user?.name?.split(' ')[0]}! 👋</h1>
-        <p>Here&apos;s your attendance overview</p>
+        <p>Your Attendance & Analytics Dashboard</p>
       </div>
 
-      {/* Batch Info */}
       {batch && (
         <div className="batch-info-card">
           <h3>📚 {batch.name}</h3>
@@ -77,54 +104,19 @@ const StudentDashboard = () => {
         </div>
       )}
 
-      {/* Stats */}
-      <div className="stats-grid">
-        <div className="stat-card">
-          <div className="stat-icon primary">
-            <FiCalendar />
-          </div>
-          <div className="stat-info">
-            <h4>Today&apos;s Status</h4>
-            <div className="stat-value">
-              {todayStatus === 'present' ? (
-                <span className="badge badge-present"><FiCheck /> Present</span>
-              ) : todayStatus === 'absent' ? (
-                <span className="badge badge-absent"><FiX /> Absent</span>
-              ) : (
-                <span style={{ fontSize: '0.9rem', color: '#6b7280' }}>Not Marked</span>
-              )}
-            </div>
-          </div>
-        </div>
-
-        <div className="stat-card">
-          <div className="stat-icon success">
-            <FiCheckCircle />
-          </div>
-          <div className="stat-info">
-            <h4>Present Days (Recent)</h4>
-            <div className="stat-value">{totalPresent}</div>
-          </div>
-        </div>
-
-        <div className="stat-card">
-          <div className="stat-icon info">
-            <FiClock />
-          </div>
-          <div className="stat-info">
-            <h4>Total Records</h4>
-            <div className="stat-value">{attendance.length}</div>
-          </div>
-        </div>
+      <div className="stats-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))' }}>
+        <StatBox title="Weekly Stats" data={stats.weekly} />
+        <StatBox title="Monthly Stats" data={stats.monthly} />
+        <StatBox title="Yearly Stats" data={stats.yearly} />
+        <StatBox title="Overall Stats" data={stats.overall} />
       </div>
 
-      {/* Mark Attendance */}
-      <div className="card text-center mb-3" style={{ padding: '40px 24px' }}>
+      <div className="card text-center mb-3" style={{ padding: '32px 24px' }}>
         <h3 style={{ marginBottom: '8px', fontSize: '1.1rem', color: '#374151' }}>
           Mark Your Attendance
         </h3>
         <p style={{ color: '#6b7280', marginBottom: '24px', fontSize: '0.9rem' }}>
-          Tap the button below to record your attendance for today
+          {todayStatus === 'present' ? 'You have successfully marked your attendance for today!' : 'Record your presence for today\'s session.'}
         </p>
         <button
           className="mark-attendance-btn"
@@ -135,7 +127,7 @@ const StudentDashboard = () => {
             <span className="spinner" style={{ width: 22, height: 22, borderWidth: 2.5, borderTopColor: '#fff' }}></span>
           ) : todayStatus === 'present' ? (
             <>
-              <FiCheckCircle /> Already Marked
+              <FiCheckCircle /> Attendance Marked
             </>
           ) : (
             <>

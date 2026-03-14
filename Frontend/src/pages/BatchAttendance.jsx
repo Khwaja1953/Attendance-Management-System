@@ -13,10 +13,18 @@ const COLORS = ['#22c55e', '#ef4444'];
 const BatchAttendance = () => {
   const { batchId } = useParams();
   const [records, setRecords] = useState([]);
-  const [stats, setStats] = useState([]);
+  const [stats, setStats] = useState({
+    overall: { totalRecords: 0, present: 0, absent: 0, holiday: 0, presentPercentage: 0, absentPercentage: 0, holidayPercentage: 0 },
+    weekly: { totalRecords: 0, present: 0, absent: 0, holiday: 0, presentPercentage: 0, absentPercentage: 0, holidayPercentage: 0 },
+    monthly: { totalRecords: 0, present: 0, absent: 0, holiday: 0, presentPercentage: 0, absentPercentage: 0, holidayPercentage: 0 },
+    yearly: { totalRecords: 0, present: 0, absent: 0, holiday: 0, presentPercentage: 0, absentPercentage: 0, holidayPercentage: 0 }
+  });
   const [loading, setLoading] = useState(true);
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
+  const [updating, setUpdating] = useState(null);
+  const [bulkDate, setBulkDate] = useState(new Date().toISOString().split('T')[0]);
+  const [bulkStatus, setBulkStatus] = useState('present');
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -32,7 +40,7 @@ const BatchAttendance = () => {
       ]);
 
       setRecords(attRes.data.data || []);
-      setStats(statsRes.data.data || []);
+      setStats(statsRes.data.data || stats);
     } catch {
       // silent
     } finally {
@@ -44,20 +52,59 @@ const BatchAttendance = () => {
     fetchData();
   }, [fetchData]);
 
-  // Bar chart data from stats
-  const barData = stats.map((s) => ({
-    date: new Date(s.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-    present: s.presentCount,
-    absent: s.absentCount,
-  }));
+  const handleStatusChange = async (studentId, date, newStatus, recordId) => {
+    setUpdating(recordId || `${studentId}-${date}`);
+    try {
+      await api.post('/admin/attendance/student', {
+        studentId,
+        batchId,
+        date,
+        status: newStatus
+      });
+      fetchData();
+    } catch (err) {
+      alert('Failed to update attendance');
+    } finally {
+      setUpdating(null);
+    }
+  };
 
-  // Pie chart data (totals)
-  const totalPresent = stats.reduce((sum, s) => sum + (s.presentCount || 0), 0);
-  const totalAbsent = stats.reduce((sum, s) => sum + (s.absentCount || 0), 0);
-  const pieData = [
-    { name: 'Present', value: totalPresent },
-    { name: 'Absent', value: totalAbsent },
-  ].filter((d) => d.value > 0);
+  const handleBulkUpdate = async () => {
+    if (!window.confirm(`Update all students to ${bulkStatus} for ${bulkDate}?`)) return;
+    setLoading(true);
+    try {
+      await api.post('/admin/attendance/batch', {
+        batchId,
+        date: bulkDate,
+        status: bulkStatus
+      });
+      fetchData();
+    } catch (err) {
+      alert('Failed to update batch attendance');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const StatBox = ({ title, data }) => (
+    <div className="stat-card" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '8px' }}>
+      <h4 style={{ margin: 0, fontSize: '0.85rem', color: '#6b7280' }}>{title}</h4>
+      <div style={{ display: 'flex', gap: '16px', width: '100%' }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: '1.25rem', fontWeight: 700 }}>{data.presentPercentage.toFixed(1)}%</div>
+          <div style={{ fontSize: '0.75rem', color: '#10b981' }}>{data.present} Present</div>
+        </div>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: '1.25rem', fontWeight: 700 }}>{data.absentPercentage.toFixed(1)}%</div>
+          <div style={{ fontSize: '0.75rem', color: '#ef4444' }}>{data.absent} Absent</div>
+        </div>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: '1.25rem', fontWeight: 700 }}>{data.holidayPercentage.toFixed(1)}%</div>
+          <div style={{ fontSize: '0.75rem', color: '#6366f1' }}>{data.holiday} Holiday</div>
+        </div>
+      </div>
+    </div>
+  );
 
   const handleClear = () => {
     setStartDate('');
@@ -71,11 +118,36 @@ const BatchAttendance = () => {
       </Link>
 
       <div className="page-header">
-        <h1>Batch Attendance</h1>
-        <p>View attendance records for this batch</p>
+        <h1>Batch Attendance & Analytics</h1>
+        <p>Comprehensive batch-wide reporting and management</p>
       </div>
 
-      {/* Filters */}
+      <div className="stats-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', marginBottom: '32px' }}>
+        <StatBox title="Weekly Average" data={stats.weekly} />
+        <StatBox title="Monthly Average" data={stats.monthly} />
+        <StatBox title="Yearly Average" data={stats.yearly} />
+        <StatBox title="Overall Average" data={stats.overall} />
+      </div>
+
+      <div className="card" style={{ marginBottom: '32px' }}>
+        <h3 style={{ marginBottom: '16px', fontSize: '1rem', fontWeight: 600 }}>Bulk Update Attendance</h3>
+        <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          <div className="filter-group" style={{ marginBottom: 0 }}>
+            <label>Date</label>
+            <input type="date" value={bulkDate} onChange={(e) => setBulkDate(e.target.value)} />
+          </div>
+          <div className="filter-group" style={{ marginBottom: 0 }}>
+            <label>Status</label>
+            <select value={bulkStatus} onChange={(e) => setBulkStatus(e.target.value)} style={{ padding: '8px', borderRadius: '6px', border: '1px solid #d1d5db' }}>
+              <option value="present">Present</option>
+              <option value="absent">Absent</option>
+              <option value="holiday">Holiday</option>
+            </select>
+          </div>
+          <button className="btn btn-primary" onClick={handleBulkUpdate}>Update Whole Batch</button>
+        </div>
+      </div>
+
       <div className="filters-bar">
         <div className="filter-group">
           <label>Start Date</label>
@@ -99,95 +171,50 @@ const BatchAttendance = () => {
           <p>Loading attendance data...</p>
         </div>
       ) : (
-        <>
-          {/* Charts Row */}
-          {stats.length > 0 && (
-            <div style={{ display: 'grid', gridTemplateColumns: pieData.length > 0 ? '2fr 1fr' : '1fr', gap: '20px', marginBottom: '24px' }}>
-              <div className="chart-container" style={{ marginBottom: 0 }}>
-                <h3>Daily Attendance</h3>
-                <ResponsiveContainer width="100%" height={300}>
-                  <BarChart data={barData}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="date" tick={{ fontSize: 12 }} />
-                    <YAxis allowDecimals={false} />
-                    <Tooltip />
-                    <Legend />
-                    <Bar dataKey="present" fill="#22c55e" name="Present" radius={[4, 4, 0, 0]} />
-                    <Bar dataKey="absent" fill="#ef4444" name="Absent" radius={[4, 4, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-
-              {pieData.length > 0 && (
-                <div className="chart-container" style={{ marginBottom: 0 }}>
-                  <h3>Overall Ratio</h3>
-                  <ResponsiveContainer width="100%" height={300}>
-                    <PieChart>
-                      <Pie
-                        data={pieData}
-                        cx="50%"
-                        cy="50%"
-                        innerRadius={60}
-                        outerRadius={100}
-                        paddingAngle={5}
-                        dataKey="value"
-                        label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+        <div className="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>Student</th>
+                <th>Date</th>
+                <th>Status</th>
+                <th>Time</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {records.map((record, i) => {
+                const isUpdating = updating === (record._id || `${record.student?._id}-${record.date}`);
+                return (
+                  <tr key={record._id || i} style={{ opacity: isUpdating ? 0.5 : 1 }}>
+                    <td style={{ fontWeight: 600 }}>{record.student?.name || 'Unknown'}</td>
+                    <td>{new Date(record.date).toLocaleDateString()}</td>
+                    <td>
+                      <span className={`badge badge-${record.status}`}>
+                        {record.status === 'present' ? <FiCheck /> : (record.status === 'absent' ? <FiX /> : <FiCalendar />)}
+                        {record.status}
+                      </span>
+                    </td>
+                    <td>{record.markedAt ? new Date(record.markedAt).toLocaleTimeString() : '—'}</td>
+                    <td>
+                      <select 
+                        className="btn-sm" 
+                        value={record.status} 
+                        onChange={(e) => handleStatusChange(record.student?._id, record.date, e.target.value, record._id)}
+                        disabled={isUpdating}
+                        style={{ padding: '4px 8px', borderRadius: '4px', border: '1px solid #d1d5db' }}
                       >
-                        {pieData.map((entry, index) => (
-                          <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                        ))}
-                      </Pie>
-                      <Tooltip />
-                    </PieChart>
-                  </ResponsiveContainer>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Table */}
-          {records.length === 0 ? (
-            <div className="card">
-              <div className="empty-state">
-                <FiCalendar />
-                <h3>No Attendance Records</h3>
-                <p>No records found for the selected period</p>
-              </div>
-            </div>
-          ) : (
-            <div className="table-container">
-              <table>
-                <thead>
-                  <tr>
-                    <th>#</th>
-                    <th>Student</th>
-                    <th>Date</th>
-                    <th>Status</th>
-                    <th>Time</th>
+                        <option value="present">Present</option>
+                        <option value="absent">Absent</option>
+                        <option value="holiday">Holiday</option>
+                      </select>
+                    </td>
                   </tr>
-                </thead>
-                <tbody>
-                  {records.map((record, i) => (
-                    <tr key={record._id || i}>
-                      <td>{i + 1}</td>
-                      <td style={{ fontWeight: 600 }}>
-                        {record.student?.name || 'Unknown'}
-                      </td>
-                      <td>{new Date(record.date).toLocaleDateString()}</td>
-                      <td>
-                        <span className={`badge badge-${record.status}`}>
-                          {record.status === 'present' ? <FiCheck /> : <FiX />}
-                          {record.status}
-                        </span>
-                      </td>
-                      <td>{record.markedAt ? new Date(record.markedAt).toLocaleTimeString() : '—'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       )}
     </Layout>
   );
